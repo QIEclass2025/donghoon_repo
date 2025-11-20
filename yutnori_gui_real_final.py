@@ -121,7 +121,6 @@ def throw_yut():
     if flat_count == 2: return '개', visuals
     if flat_count == 3: return '걸', visuals
     if flat_count == 4: return '윷', visuals
-    return '낙', visuals
 
 class Piece:
     def __init__(self, pid, player_info, pokemon_name):
@@ -255,9 +254,10 @@ class YutnoriGameLogic:
             # 상대 잡기
             for opp in self.players[1 - self.current_player_index]['pieces']:
                 if opp.onBoard and opp.node_id == piece.node_id:
-                    for sp in opp.stacked_pieces:
+                    stacked_to_reset = list(opp.stacked_pieces)
+                    for sp in stacked_to_reset:
                         sp.onBoard, sp.node_id, sp.history = False, -1, []
-                    opp.stacked_pieces = [opp]
+                        sp.stacked_pieces = [sp]
                     captured = True
             # 아군 업기
             for ally in self.get_current_player()['pieces']:
@@ -276,7 +276,7 @@ class YutnoriGUI(tk.Frame):
         super().__init__(master)
         self.master = master
         self.master.title('윷놀이')
-        self.master.geometry('900x720')
+        self.master.geometry('1000x720')
         self.pack(fill=tk.BOTH, expand=True)
 
         self.game = YutnoriGameLogic()
@@ -304,6 +304,9 @@ class YutnoriGUI(tk.Frame):
 
         self.player_label = tk.Label(control, text="", font=("Malgun Gothic", 18, "bold"), bg='#F0F0F0', fg='#2244FF')
         self.player_label.pack(pady=(10, 10))
+
+        self.yut_display_label = tk.Label(control, text="", font=("Malgun Gothic", 24, "bold"), bg='#F0F0F0', height=2)
+        self.yut_display_label.pack(pady=10)
 
         self.throw_button = tk.Button(control, text="윷 굴리기", command=self.handle_throw_yut, height=2)
         self.throw_button.pack(pady=10, fill=tk.X, padx=12)
@@ -411,28 +414,82 @@ class YutnoriGUI(tk.Frame):
     def update_moves_display(self):
         for w in self.moves_frame.winfo_children():
             w.destroy()
+
+        can_move_backdo = any(p.onBoard for p in self.game.get_current_player()['pieces'])
+        
         if not self.game.turn_moves:
             tk.Label(self.moves_frame, text="이동할 결과가 없습니다.", bg="#F0F0F0").pack()
             return
-        tk.Label(self.moves_frame, text="사용할 이동 선택:", bg="#F0F0F0").pack()
+
+        has_playable_moves = False
+        playable_moves_frame = tk.Frame(self.moves_frame, bg='#F0F0F0')
+        
         for mv in self.game.turn_moves:
-            tk.Button(self.moves_frame, text=f"{mv}({YUT_MAP[mv]})",
+            if mv == '빽도' and not can_move_backdo:
+                continue
+            
+            has_playable_moves = True
+            tk.Button(playable_moves_frame, text=f"{mv}({YUT_MAP[mv]})",
                       command=lambda m=mv: self.handle_move_selection(m)).pack(fill=tk.X, padx=10, pady=2)
+
+        if not has_playable_moves:
+            tk.Label(self.moves_frame, text="움직일 수 있는 말이 없습니다.", bg="#F0F0F0").pack()
+            tk.Button(self.moves_frame, text="턴 넘기기",
+                      command=self.handle_pass_turn).pack(fill=tk.X, padx=10, pady=2)
+        else:
+            tk.Label(self.moves_frame, text="사용할 이동 선택:", bg="#F0F0F0").pack()
+            playable_moves_frame.pack(fill=tk.X)
+
+    def handle_pass_turn(self):
+        self.message_label.config(text="턴 종료. 다음 플레이어 차례입니다.")
+        self.game.turn_moves = []
+        self.game.switch_player()
+        self.throw_button.config(state=tk.NORMAL)
+        self.update_display()
 
     # -------- 컨트롤러 -------- 
     def handle_throw_yut(self):
         self.throw_button.config(state=tk.DISABLED)
-        name, _ = throw_yut()
-        if name == '낙':
-            self.message_label.config(text="'낙' - 턴을 넘깁니다.")
+        name, visuals = throw_yut()
+        self.show_yut_animation(name, visuals)
+
+    def show_yut_animation(self, final_name, final_visuals):
+        animation_duration = 1000  # 1 second for animation
+        
+        start_time = self.master.winfo_toplevel().tk.call('clock', 'milliseconds')
+
+        def animate():
+            elapsed = self.master.winfo_toplevel().tk.call('clock', 'milliseconds') - start_time
+            if elapsed < animation_duration:
+                # Animate with symbols
+                sticks = [random.choice(['flat', 'round']) for _ in range(3)] + [random.choice(['flat_x', 'round_x'])]
+                visuals = [YUT_SYMBOL[s] for s in sticks]
+                visual_str = " ".join(visuals)
+                self.yut_display_label.config(text=f"{visual_str}")
+                self.master.after(50, animate)
+            else:
+                # Show final result
+                visual_str = " ".join(final_visuals)
+                self.yut_display_label.config(text=f"{final_name}\n{visual_str}")
+                self.after_animation(final_name)
+
+        animate()
+
+    def after_animation(self, name):
+        # 빽도인데 판에 말이 없는 경우
+        if name == '빽도' and not any(p.onBoard for p in self.game.get_current_player()['pieces']):
+            self.message_label.config(text="빽도! 하지만 움직일 말이 없어 턴을 넘깁니다.")
             self.game.switch_player()
             self.update_display()
             self.throw_button.config(state=tk.NORMAL)
             return
+
         self.game.turn_moves.append(name)
         self.update_moves_display()
+        
         if name in ('윷', '모'):
             self.throw_button.config(state=tk.NORMAL)
+        
         self.message_label.config(text="움직일 말을 클릭하세요.")
 
     def handle_piece_click(self, piece):
@@ -448,6 +505,11 @@ class YutnoriGUI(tk.Frame):
             self.message_label.config(text="먼저 움직일 말을 클릭하세요.")
             return
         if move_name not in self.game.turn_moves:
+            return
+
+        # 빽도 꼼수 방지
+        if self.selected_piece.is_waiting() and move_name == '빽도':
+            self.message_label.config(text="판에 없는 말은 빽도를 할 수 없습니다.")
             return
 
         result = self.game.move_piece(self.selected_piece, move_name)
